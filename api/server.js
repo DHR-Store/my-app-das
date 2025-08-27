@@ -3,11 +3,9 @@ const bodyParser = require('body-parser');
 const cors = require('cors');
 const { createClient } = require('@vercel/kv');
 
-const app = express();
-
 const kv = createClient({
-    url: process.env.KV_REST_API_URL,
-    token: process.env.KV_REST_API_TOKEN,
+    url: process.env.KV_URL,
+    token: process.env.BLOB_READ_WRITE_TOKEN,
 });
 
 const APP_KEY = 'vega_stats';
