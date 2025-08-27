@@ -1,83 +1,60 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
-const mongoose = require('mongoose');
+const { createClient } = require('@vercel/kv');
 
 const app = express();
 
-// Load environment variables (for production, use Vercel's environment variables)
-const MONGODB_URI = process.env.MONGODB_URI || 'YOUR_MONGODB_ATLAS_CONNECTION_STRING';
-const PORT = process.env.PORT || 3000;
-
-// Connect to MongoDB
-mongoose.connect(MONGODB_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true
-}).then(() => {
-    console.log('Connected to MongoDB Atlas');
-}).catch(err => {
-    console.error('Database connection error:', err);
+const kv = createClient({
+    url: process.env.KV_REST_API_URL,
+    token: process.env.KV_REST_API_TOKEN,
 });
 
-// Define the schema for our data
-const StatsSchema = new mongoose.Schema({
-    _id: String, // Use a fixed ID like 'vega_stats'
-    downloads: {
-        'arm64-v8a': { type: Number, default: 0 },
-        'armeabi-v7a': { type: Number, default: 0 },
-        'universal': { type: Number, default: 0 }
-    },
-    ratings: {
-        '5': { type: Number, default: 0 },
-        '4': { type: Number, default: 0 },
-        '3': { type: Number, default: 0 },
-        '2': { type: Number, default: 0 },
-        '1': { type: Number, default: 0 }
-    }
-});
+const APP_KEY = 'vega_stats';
 
-const Stats = mongoose.model('Stats', StatsSchema);
-
-// Middleware
 app.use(bodyParser.json());
 app.use(cors());
 
-// --- API Endpoints ---
-
-// Endpoint to get all data (downloads and ratings)
+// Endpoint to get all data
 app.get('/api/data', async (req, res) => {
     try {
-        let stats = await Stats.findById('vega_stats');
-        if (!stats) {
-            stats = new Stats({ _id: 'vega_stats' });
-            await stats.save();
+        let stats = await kv.hgetall(APP_KEY);
+        if (!stats || Object.keys(stats).length === 0) {
+            stats = {
+                downloads: {
+                    'arm64-v8a': 0,
+                    'armeabi-v7a': 0,
+                    'universal': 0
+                },
+                ratings: {
+                    '5': 590,
+                    '4': 0,
+                    '3': 0,
+                    '2': 0,
+                    '1': 0
+                }
+            };
+            await kv.hset(APP_KEY, { ...stats });
         }
-        res.json(stats);
+        res.status(200).json(stats);
     } catch (error) {
-        res.status(500).json({ success: false, message: 'Server error', error });
+        console.error('Error fetching data:', error);
+        res.status(500).json({ success: false, message: 'Server error' });
     }
 });
 
 // Endpoint to track a download
 app.post('/api/download', async (req, res) => {
     const { version } = req.body;
+    if (!version) {
+        return res.status(400).json({ success: false, message: 'Version is required' });
+    }
     try {
-        let stats = await Stats.findById('vega_stats');
-        if (!stats) {
-             // Create a document if it doesn't exist
-            stats = new Stats({ _id: 'vega_stats' });
-            await stats.save();
-        }
-
-        if (stats.downloads[version] !== undefined) {
-            stats.downloads[version]++;
-            await stats.save();
-            res.status(200).json({ success: true, message: 'Download tracked' });
-        } else {
-            res.status(400).json({ success: false, message: 'Invalid version' });
-        }
+        await kv.hincrby(APP_KEY, `downloads.${version}`, 1);
+        res.status(200).json({ success: true, message: 'Download tracked' });
     } catch (error) {
-        res.status(500).json({ success: false, message: 'Server error', error });
+        console.error('Error tracking download:', error);
+        res.status(500).json({ success: false, message: 'Server error' });
     }
 });
 
@@ -85,26 +62,13 @@ app.post('/api/download', async (req, res) => {
 app.post('/api/rating', async (req, res) => {
     const { value } = req.body;
     const ratingValue = String(value);
-
     try {
-        let stats = await Stats.findById('vega_stats');
-        if (!stats) {
-            // Create a document if it doesn't exist
-            stats = new Stats({ _id: 'vega_stats' });
-            await stats.save();
-        }
-
-        if (stats.ratings[ratingValue] !== undefined) {
-            stats.ratings[ratingValue]++;
-            await stats.save();
-            res.status(200).json({ success: true, message: 'Rating saved' });
-        } else {
-            res.status(400).json({ success: false, message: 'Invalid rating value' });
-        }
+        await kv.hincrby(APP_KEY, `ratings.${ratingValue}`, 1);
+        res.status(200).json({ success: true, message: 'Rating saved' });
     } catch (error) {
-        res.status(500).json({ success: false, message: 'Server error', error });
+        console.error('Error saving rating:', error);
+        res.status(500).json({ success: false, message: 'Server error' });
     }
 });
 
-// Define the root path for Vercel
 module.exports = app;
